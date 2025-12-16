@@ -245,14 +245,13 @@ class UniSyncGUI(tk.Tk):
         update_ui_state()
 
     def show_flash_message(self, message, color):
-        """Displays a message for 3 seconds then resets."""
+        #Displays a message for 3 seconds then resets.
         self.msg_var.set(message)
         self.lbl_msg.config(fg=color)
-        # Schedule reset after 3000ms (3 seconds)
         self.after(3000, self.reset_flash_message)
 
     def reset_flash_message(self):
-        """Resets the bottom bar to default state."""
+        #Resets the bottom bar to default state.
         self.msg_var.set("System Ready")
         self.lbl_msg.config(fg="gray")
 
@@ -277,7 +276,6 @@ class UniSyncGUI(tk.Tk):
             else:
                 self.set_status_indicator("ERROR", COLOR_ERROR)
                 self.show_flash_message("✖ Failed to Apply Settings", COLOR_ERROR)
-                # We print the error to terminal for debugging, but keep GUI clean
                 print(f"Error: {result.stderr}")
                 
         except Exception as e:
