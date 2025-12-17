@@ -9,6 +9,10 @@ import time
 import sys
 import hashlib
 
+# --- VERSION CONTROL ---
+# Increment this number whenever you change the Daemon logic!
+DAEMON_VERSION = "1.1"
+
 # --- EMBEDDED INSTALLER SCRIPT ---
 INSTALLER_SCRIPT_CONTENT = r"""#!/bin/bash
 if [ "$EUID" -ne 0 ]; then
@@ -19,11 +23,12 @@ fi
 DAEMON_PATH="/usr/local/bin/uni-curve-daemon.py"
 SERVICE_PATH="/etc/systemd/system/uni-curve.service"
 
-echo "--- Installing Uni-Sync Smart Daemon ---"
+echo "--- Installing Uni-Sync Smart Daemon v__VERSION__ ---"
 
 # 1. Write the Python Daemon
 cat << 'PY_EOF' > $DAEMON_PATH
 #!/usr/bin/env python3
+# VERSION: __VERSION__
 import json, subprocess, time, os, hashlib, sys
 
 CURVE_FILE = "/etc/uni-sync/fan_curves.json"
@@ -84,8 +89,8 @@ def main():
                 time.sleep(1)
                 continue
 
-            # Curve Update (Every 4s)
-            if curr_time - last_run > 4:
+            # Curve Update (Every 3s)
+            if curr_time - last_run > 3:
                 last_run = curr_time
                 if not os.path.exists(CURVE_FILE): continue
                 try:
@@ -104,7 +109,7 @@ def main():
                             ch = uni_conf['configs'][d_idx]['channels'][c_idx]
                             if ch.get('mode') == 'Manual':
                                 tgt = calculate_speed(curr_t, pts)
-                                if abs(ch.get('speed', 0) - tgt) > 2:
+                                if abs(ch.get('speed', 0) - tgt) > 0:
                                     ch['speed'] = tgt
                                     changed = True
                     except: pass
@@ -141,15 +146,17 @@ SVC_EOF
 systemctl daemon-reload
 systemctl enable uni-curve.service
 systemctl restart uni-curve.service
-"""
+""".replace("__VERSION__", DAEMON_VERSION)
 
 # --- GUI CODE ---
 CONFIG_PATH = "/etc/uni-sync/uni-sync.json"
 CURVE_PATH = "/etc/uni-sync/fan_curves.json"
 DAEMON_SVC = "uni-curve.service"
+DAEMON_BIN = "/usr/local/bin/uni-curve-daemon.py"
 
 COLOR_BG, COLOR_CARD, COLOR_ACCENT = "#121212", "#1E1E1E", "#00ADEF"
 COLOR_TEXT, COLOR_SUCCESS, COLOR_ERROR = "#FFFFFF", "#00E676", "#FF5252"
+COLOR_WARN = "#FFC107"
 
 class UniSyncGUI(tk.Tk):
     def __init__(self):
@@ -157,7 +164,6 @@ class UniSyncGUI(tk.Tk):
         self.title("Uni-Sync Controller")
         self.geometry("850x750")
         self.configure(bg=COLOR_BG)
-        # Allow resizing
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
 
@@ -197,7 +203,6 @@ class UniSyncGUI(tk.Tk):
         s.map("Horizontal.TScale", background=[("active", COLOR_ACCENT), ("!active", COLOR_ACCENT)])
 
     def setup_ui(self):
-        # Header
         h = tk.Frame(self, bg=COLOR_BG, pady=20)
         h.grid(row=0, column=0, sticky="ew")
         
@@ -209,25 +214,20 @@ class UniSyncGUI(tk.Tk):
         self.daemon_box = tk.Frame(self.st_frm, bg=COLOR_BG)
         self.daemon_box.pack(anchor="e")
 
-        # Scrollable Content Area
         c = tk.Frame(self, bg=COLOR_BG)
         c.grid(row=1, column=0, sticky="nsew", padx=20, pady=5)
         
         self.cvs = tk.Canvas(c, bg=COLOR_BG, highlightthickness=0)
         sb = ttk.Scrollbar(c, orient="vertical", command=self.cvs.yview)
-        
         self.frm = tk.Frame(self.cvs, bg=COLOR_BG)
-        
         self.win_id = self.cvs.create_window((0, 0), window=self.frm, anchor="nw")
         
         self.frm.bind("<Configure>", lambda e: self.cvs.configure(scrollregion=self.cvs.bbox("all")))
         self.cvs.bind("<Configure>", lambda e: self.cvs.itemconfig(self.win_id, width=e.width))
-
         self.cvs.configure(yscrollcommand=sb.set)
         self.cvs.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         sb.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # Footer
         f = tk.Frame(self, bg=COLOR_CARD, pady=15, padx=25)
         f.grid(row=2, column=0, sticky="ew")
         
@@ -239,44 +239,72 @@ class UniSyncGUI(tk.Tk):
         self.btn_sav.pack(side=tk.RIGHT)
         tk.Button(f, text="Reload", command=self.load_config, bg="#333", fg="white", relief="flat", padx=10, pady=5).pack(side=tk.RIGHT, padx=10)
 
-        # --- SCROLL FIX: Bind mousewheel to the root window ---
         def _on_mousewheel(event):
-            # Linux uses Button-4 (Up) and Button-5 (Down)
-            if event.num == 4:
-                self.cvs.yview_scroll(-1, "units")
-            elif event.num == 5:
-                self.cvs.yview_scroll(1, "units")
-            # Windows/MacOS uses .delta
-            elif event.delta:
-                self.cvs.yview_scroll(int(-1*(event.delta/120)), "units")
-
-        # Bind globally so hovering anywhere works
+            if event.num == 4: self.cvs.yview_scroll(-1, "units")
+            elif event.num == 5: self.cvs.yview_scroll(1, "units")
+            elif event.delta: self.cvs.yview_scroll(int(-1*(event.delta/120)), "units")
+        
         self.bind_all("<Button-4>", _on_mousewheel)
         self.bind_all("<Button-5>", _on_mousewheel)
         self.bind_all("<MouseWheel>", _on_mousewheel)
 
     def check_status(self):
         for w in self.daemon_box.winfo_children(): w.destroy()
+        
+        is_active = False
         try:
             r = subprocess.run(["systemctl", "is-active", DAEMON_SVC], capture_output=True, text=True)
             if r.stdout.strip() == "active":
-                tk.Label(self.daemon_box, text="● Daemon Active", font=("Segoe UI", 9), bg=COLOR_BG, fg=COLOR_SUCCESS).pack(anchor="e")
-            else:
-                tk.Button(self.daemon_box, text="⚠ INSTALL DAEMON", command=self.install, bg=COLOR_ERROR, fg="white", font=("Segoe UI", 8, "bold"), relief="flat").pack(pady=2)
+                is_active = True
         except: pass
 
+        if not is_active:
+             tk.Button(self.daemon_box, text="⚠ INSTALL SERVICE", command=self.install, bg=COLOR_ERROR, fg="white", font=("Segoe UI", 8, "bold"), relief="flat").pack(pady=2)
+             return
+
+        installed_version = "0.0"
+        if os.path.exists(DAEMON_BIN):
+            try:
+                with open(DAEMON_BIN, "r") as f:
+                    for line in f:
+                        if "# VERSION:" in line:
+                            installed_version = line.split("VERSION:")[1].strip()
+                            break
+            except: pass
+        
+        if installed_version != DAEMON_VERSION:
+            tk.Button(self.daemon_box, text="⚠ UPDATE SERVICE", command=self.install, bg=COLOR_WARN, fg="black", font=("Segoe UI", 8, "bold"), relief="flat").pack(pady=2)
+        else:
+            tk.Label(self.daemon_box, text=f"● Service v{DAEMON_VERSION} Active", font=("Segoe UI", 9), bg=COLOR_BG, fg=COLOR_SUCCESS).pack(anchor="e")
+
     def install(self):
-        tmp = "/tmp/uni_sync_install.sh"
+        unique_id = int(time.time())
+        tmp = f"/tmp/uni_sync_install_{unique_id}.sh"
+        
         try:
-            with open(tmp, "w") as f: f.write(INSTALLER_SCRIPT_CONTENT)
+            with open(tmp, "w") as f: 
+                f.write(INSTALLER_SCRIPT_CONTENT)
+            
             os.chmod(tmp, 0o755)
             self.msg.set("Requesting Root...")
             self.update_idletasks()
+            
+            # Execute the installer
             subprocess.run(["pkexec", tmp], check=True)
+            
+            # Cleanup the temp file immediately after use
+            if os.path.exists(tmp):
+                os.remove(tmp)
+                
             self.check_status()
-            messagebox.showinfo("Success", "Service Installed!")
+            messagebox.showinfo("Success", f"Service Updated to v{DAEMON_VERSION}!")
             self.msg.set("Installed!")
-        except Exception as e: messagebox.showerror("Error", f"{e}")
+        except Exception as e: 
+            messagebox.showerror("Error", f"Installation failed: {e}")
+        finally:
+            # Ensure cleanup happens even if the install fails
+            if os.path.exists(tmp):
+                os.remove(tmp)
 
     def load_config(self):
         for w in self.frm.winfo_children(): w.destroy()
